@@ -1,5 +1,5 @@
 [workspace]
-members = ["tests", "contracts/pay-fee", "contracts/auth"]
+members = ["tests", "contracts/pay-fee", "contracts/auth", "contracts/state"]
 
 [profile.release]
 overflow-checks = true

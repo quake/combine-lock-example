@@ -1,8 +1,17 @@
 use super::*;
-use ckb_debugger_tests::{combine_lock_mol::*, blockchain::{BytesVec, WitnessArgs}};
+use ckb_debugger_tests::{
+    blockchain::{BytesVec, WitnessArgs},
+    combine_lock_mol::*,
+};
 use ckb_testtool::{
     builtin::ALWAYS_SUCCESS,
-    ckb_types::{bytes::Bytes, core::Capacity, core::{TransactionBuilder, ScriptHashType}, packed::{Script, CellOutput, CellInput, CellDep}, prelude::*},
+    ckb_types::{
+        bytes::Bytes,
+        core::Capacity,
+        core::{ScriptHashType, TransactionBuilder},
+        packed::{CellDep, CellInput, CellOutput, Script},
+        prelude::*,
+    },
     context::Context,
 };
 
@@ -113,6 +122,48 @@ fn test_auth() {
 }
 
 #[test]
+fn test_state() {
+    // deploy contract
+    let mut context = Context::default();
+    let contract_bin: Bytes = Loader::default().load_binary("state");
+    let s_out_point = context.deploy_cell(contract_bin);
+
+    // prepare scripts
+    let lock_script = context.build_script(&s_out_point, Bytes::new()).unwrap();
+
+    // prepare cells
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(Capacity::bytes(1000).unwrap().pack())
+            .lock(lock_script.clone())
+            .build(),
+        vec![1].into(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+    let output = CellOutput::new_builder()
+        .capacity(Capacity::bytes(1000).unwrap().pack())
+        .lock(lock_script.clone())
+        .build();
+
+    // build transaction
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(Bytes::from(vec![3]).pack())
+        .witness(Bytes::new().pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    // run
+    let cycles = context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("pass verification");
+    println!("consume cycles: {}", cycles);
+}
+
+#[test]
 fn test_combine_pay_fee_auth() {
     // deploy contract
     let mut context = Context::default();
@@ -156,7 +207,11 @@ fn test_combine_pay_fee_auth() {
     blake2b.finalize(&mut hash);
 
     let lock_script = context
-        .build_script_with_hash_type(&ccl_out_point, ScriptHashType::Data2, Bytes::from(hash.to_vec()))
+        .build_script_with_hash_type(
+            &ccl_out_point,
+            ScriptHashType::Data2,
+            Bytes::from(hash.to_vec()),
+        )
         .unwrap();
 
     // prepare cells
@@ -175,13 +230,11 @@ fn test_combine_pay_fee_auth() {
         .lock(lock_script.clone())
         .build()];
 
-    // prepare witnesses
+    // prepare witnesses with child script config, pass the auth lock verification
     let child_script_config_opt = ChildScriptConfigOpt::new_builder()
         .set(Some(child_script_config))
         .build();
-    let inner_witness = BytesVec::new_builder()
-        .push(vec![24, 42].pack())
-        .build();
+    let inner_witness = BytesVec::new_builder().push(vec![24, 42].pack()).build();
     let combine_lock_witness = CombineLockWitness::new_builder()
         .index(Uint16::new_unchecked(0u16.to_le_bytes().to_vec().into()))
         .inner_witness(inner_witness)
@@ -198,6 +251,111 @@ fn test_combine_pay_fee_auth() {
         .input(input)
         .outputs(outputs)
         .output_data(Bytes::new().pack())
+        .witness(witness_args.as_bytes().pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    // run
+    let cycles = context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("pass verification");
+    println!("consume cycles: {}", cycles);
+}
+
+#[test]
+fn test_combine_state_pay_fee_auth() {
+    // deploy contract
+    let mut context = Context::default();
+    let contract_bin: Bytes = Loader::default().load_binary("auth");
+    let a_out_point = context.deploy_cell(contract_bin);
+    let contract_bin: Bytes = Loader::default().load_binary("state");
+    let s_out_point = context.deploy_cell(contract_bin);
+    let contract_bin: Bytes = Loader::default().load_binary("pay-fee");
+    let pf_out_point = context.deploy_cell(contract_bin);
+    let contract_bin: Bytes = Loader::default().load_binary("ckb-combine-lock");
+    let ccl_out_point = context.deploy_cell(contract_bin);
+    let as_out_point = context.deploy_cell(ALWAYS_SUCCESS.clone());
+
+    // prepare scripts
+    let type_script = context.build_script(&as_out_point, Bytes::new()).unwrap();
+
+    let type_script_hash = type_script.calc_script_hash();
+    let max_fee: u64 = 10000000; // 0.1 CKB
+
+    let pay_fee_script = context
+        .build_script(
+            &pf_out_point,
+            [
+                type_script_hash.as_slice(),
+                max_fee.to_le_bytes().as_slice(),
+            ]
+            .concat()
+            .into(),
+        )
+        .unwrap();
+
+    let auth_script = context
+        .build_script(&a_out_point, vec![42, 24].into())
+        .unwrap();
+
+    let state_script = context.build_script(&s_out_point, Bytes::new()).unwrap();
+
+    let child_script_config = build_child_script_config(
+        &[auth_script, pay_fee_script, state_script],
+        &[&[0], &[1], &[2]],
+    );
+    let mut hash = [0; 32];
+    let mut blake2b = blake2b_rs::Blake2bBuilder::new(32)
+        .personal(b"ckb-default-hash")
+        .build();
+    blake2b.update(child_script_config.as_slice());
+    blake2b.finalize(&mut hash);
+
+    let lock_script = context
+        .build_script_with_hash_type(
+            &ccl_out_point,
+            ScriptHashType::Data2,
+            Bytes::from(hash.to_vec()),
+        )
+        .unwrap();
+
+    // prepare cells
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(Capacity::bytes(1000).unwrap().pack())
+            .lock(lock_script.clone())
+            .build(),
+        vec![1].into(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+    let output = CellOutput::new_builder()
+        .capacity(Capacity::bytes(1000).unwrap().pack())
+        .lock(lock_script.clone())
+        .build();
+
+    // prepare witnesses with child script config, pass the state lock verification
+    let child_script_config_opt = ChildScriptConfigOpt::new_builder()
+        .set(Some(child_script_config))
+        .build();
+    let inner_witness = BytesVec::new_builder().push(Default::default()).build();
+    let combine_lock_witness = CombineLockWitness::new_builder()
+        .index(Uint16::new_unchecked(2u16.to_le_bytes().to_vec().into()))
+        .inner_witness(inner_witness)
+        .script_config(child_script_config_opt)
+        .build();
+
+    let witness_args = WitnessArgs::new_builder()
+        .lock(Some(combine_lock_witness.as_bytes()).pack())
+        .build();
+
+    // build transaction
+    let tx = TransactionBuilder::default()
+        .cell_dep(CellDep::new_builder().out_point(s_out_point).build())
+        .input(input)
+        .output(output)
+        .output_data(Bytes::from(vec![3]).pack())
         .witness(witness_args.as_bytes().pack())
         .build();
     let tx = context.complete_tx(tx);
@@ -227,7 +385,8 @@ fn build_child_script_config(scripts: &[Script], indexes: &[&[u8]]) -> ChildScri
         for i in index {
             child_script_vec_builder = child_script_vec_builder.push((*i).into());
         }
-        child_script_vec_vec_builder = child_script_vec_vec_builder.push(child_script_vec_builder.build());
+        child_script_vec_vec_builder =
+            child_script_vec_vec_builder.push(child_script_vec_builder.build());
     }
 
     ChildScriptConfig::new_builder()

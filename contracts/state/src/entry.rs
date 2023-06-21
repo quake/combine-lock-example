@@ -12,36 +12,30 @@ use ckb_std::{
     ckb_types::prelude::*,
     debug,
     high_level::{
-        decode_hex, load_cell_capacity, load_cell_lock_hash, load_cell_type_hash, load_script,
-        load_witness, QueryIter,
+        decode_hex, load_cell, load_cell_data, load_cell_lock_hash, load_script, load_witness,
+        QueryIter,
     },
 };
 
 use crate::error::Error;
 
 pub fn main() -> Result<(), Error> {
-    let (script_args, _witness) = load_script_args_and_witness()?;
-    validate(script_args)
+    let (script_args, witness) = load_script_args_and_witness()?;
+    validate(script_args, witness)
 }
 
-fn validate(script_args: Vec<u8>) -> Result<(), Error> {
-    debug!("script args is {:?}", script_args);
-
-    if script_args.len() != 40 {
-        return Err(Error::InvalidArgsLen);
-    }
+fn validate(script_args: Vec<u8>, witness: Vec<u8>) -> Result<(), Error> {
+    debug!("script_args is {:?}", script_args);
+    debug!("witness is {:?}", witness);
 
     let lock_script = load_script()?;
     let lock_script_hash: [u8; 32] = lock_script.calc_script_hash().unpack();
-    let type_script_hash: [u8; 32] = script_args[0..32].try_into().unwrap();
-    let max_fee: u64 = u64::from_le_bytes(script_args[32..40].try_into().unwrap());
 
-    let iter = QueryIter::new(load_cell_lock_hash, Source::Input)
-        .zip(QueryIter::new(load_cell_type_hash, Source::Input));
+    let iter = QueryIter::new(load_cell_lock_hash, Source::Input);
     let inputs: Vec<_> = iter
         .enumerate()
-        .filter_map(|(index, (l_hash, t_hash))| {
-            if l_hash == lock_script_hash && t_hash == Some(type_script_hash) {
+        .filter_map(|(index, l_hash)| {
+            if l_hash == lock_script_hash {
                 Some(index)
             } else {
                 None
@@ -52,12 +46,11 @@ fn validate(script_args: Vec<u8>) -> Result<(), Error> {
         return Err(Error::InvalidCellCount);
     }
 
-    let iter = QueryIter::new(load_cell_lock_hash, Source::Output)
-        .zip(QueryIter::new(load_cell_type_hash, Source::Output));
+    let iter = QueryIter::new(load_cell_lock_hash, Source::Output);
     let outputs: Vec<_> = iter
         .enumerate()
-        .filter_map(|(index, (l_hash, t_hash))| {
-            if l_hash == lock_script_hash && t_hash == Some(type_script_hash) {
+        .filter_map(|(index, l_hash)| {
+            if l_hash == lock_script_hash {
                 Some(index)
             } else {
                 None
@@ -68,13 +61,25 @@ fn validate(script_args: Vec<u8>) -> Result<(), Error> {
         return Err(Error::InvalidCellCount);
     }
 
-    let input_capacity: u64 = load_cell_capacity(inputs[0], Source::Input)?;
-    let output_capacity: u64 = load_cell_capacity(outputs[0], Source::Output)?;
-
-    if input_capacity > output_capacity + max_fee {
-        return Err(Error::InvalidFee);
+    let input = load_cell(inputs[0], Source::Input)?;
+    let output = load_cell(outputs[0], Source::Output)?;
+    if input.as_slice() != output.as_slice() {
+        return Err(Error::CellChanged);
     }
-    Ok(())
+
+    let input_data = load_cell_data(inputs[0], Source::Input)?;
+    let output_data = load_cell_data(outputs[0], Source::Output)?;
+    validate_state_transition(&input_data, &output_data)
+}
+
+fn validate_state_transition(input_data: &[u8], output_data: &[u8]) -> Result<(), Error> {
+    match (input_data, output_data) {
+        ([], [1]) => Ok(()),
+        ([1], [2]) => Ok(()),
+        ([1], [3]) => Ok(()),
+        ([2], [4]) => Ok(()),
+        _ => Err(Error::InvalidStateTransition),
+    }
 }
 
 fn load_script_args_and_witness() -> Result<(Vec<u8>, Vec<u8>), Error> {

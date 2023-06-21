@@ -15,3 +15,7 @@ template_type = "Rust"
 [[contracts]]
 name = "auth"
 template_type = "Rust"
+
+[[contracts]]
+name = "state"
+template_type = "Rust"

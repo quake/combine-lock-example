@@ -9,9 +9,9 @@ pub enum Error {
     Encoding,
     // Add customized errors here...
     WrongArgv,
-    InvalidArgsLen,
     InvalidCellCount,
-    InvalidFee,
+    CellChanged,
+    InvalidStateTransition,
 }
 
 impl From<SysError> for Error {
