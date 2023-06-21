@@ -1,0 +1,4 @@
+[submodule "ckb-combine-lock-poc"]
+	path = ckb-combine-lock-poc
+	url = https://github.com/quake/ckb-combine-lock-poc.git
+	branch = quake/ckb2023

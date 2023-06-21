@@ -2,7 +2,7 @@ use super::*;
 use ckb_debugger_tests::{combine_lock_mol::*, blockchain::{BytesVec, WitnessArgs}};
 use ckb_testtool::{
     builtin::ALWAYS_SUCCESS,
-    ckb_types::{bytes::Bytes, core::Capacity, core::TransactionBuilder, packed::{Script, CellOutput, CellInput, CellDep}, prelude::*},
+    ckb_types::{bytes::Bytes, core::Capacity, core::{TransactionBuilder, ScriptHashType}, packed::{Script, CellOutput, CellInput, CellDep}, prelude::*},
     context::Context,
 };
 
@@ -156,7 +156,7 @@ fn test_combine_pay_fee_auth() {
     blake2b.finalize(&mut hash);
 
     let lock_script = context
-        .build_script(&ccl_out_point, Bytes::from(hash.to_vec()))
+        .build_script_with_hash_type(&ccl_out_point, ScriptHashType::Data2, Bytes::from(hash.to_vec()))
         .unwrap();
 
     // prepare cells
@@ -180,7 +180,7 @@ fn test_combine_pay_fee_auth() {
         .set(Some(child_script_config))
         .build();
     let inner_witness = BytesVec::new_builder()
-        .push(Default::default())
+        .push(vec![24, 42].pack())
         .build();
     let combine_lock_witness = CombineLockWitness::new_builder()
         .index(Uint16::new_unchecked(0u16.to_le_bytes().to_vec().into()))
